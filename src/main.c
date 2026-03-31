@@ -55,9 +55,9 @@ main(int argc, char *argv[]) {
 
     if (cli_mode) {
         // fprintf(stderr, "FSearch CLI Mode active...\n"); // Optional debug
-        const char *db_path = "/home/sunshine/.local/share/fsearch/fsearch.db";
+        g_autofree char *db_path = fsearch_application_get_database_file_path();
         FsearchDatabase *db = db_new(NULL, NULL, NULL, false);
-        
+
         if (db_load(db, db_path, NULL)) {
             DynamicArray *files = db_get_files(db);
             DynamicArray *folders = db_get_folders(db);
