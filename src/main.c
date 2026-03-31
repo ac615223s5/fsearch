@@ -25,7 +25,6 @@
 #include <gtk/gtk.h>
 #include <locale.h>
 
-#define _GNU_SOURCE  // Required for strcasestr
 #include <stdio.h>
 #include <string.h>
 #include "fsearch_database.h"
@@ -33,6 +32,7 @@
 #include "fsearch_database_search.h"
 #include "fsearch_array.h"
 #include "fsearch_query.h"
+#include "fsearch_filter_manager.h"
 
 int
 main(int argc, char *argv[]) {
@@ -59,38 +59,58 @@ main(int argc, char *argv[]) {
         FsearchDatabase *db = db_new(NULL, NULL, NULL, false);
 
         if (db_load(db, db_path, NULL)) {
+            // Create filter manager with defaults for query parsing
+            FsearchFilterManager *filter_manager = fsearch_filter_manager_new_with_defaults();
+
+            // Create query object using the existing query system
+            FsearchQuery *query = fsearch_query_new(search_term, NULL, filter_manager, 0, "cli_query");
+
+            // Get thread pool from database for parallel search
+            FsearchThreadPool *pool = db_get_thread_pool(db);
+
+            // Get unsorted entries from database
             DynamicArray *files = db_get_files(db);
             DynamicArray *folders = db_get_folders(db);
 
-            // If search_term is empty, print everything
-            // If search_term has text, use strcasestr to filter via FSearch
-            
-            if (files) {
-                uint32_t num = darray_get_num_items(files);
-                for (uint32_t i = 0; i < num; i++) {
-                    FsearchDatabaseEntry *entry = darray_get_item(files, i);
-                    const char *name = db_entry_get_name_raw(entry);
-                    if (name && (strlen(search_term) == 0 || strcasestr(name, search_term))) {
+            // Perform search using db_search with cancellable set to NULL
+            g_autoptr(GCancellable) cancellable = g_cancellable_new();
+            DatabaseSearchResult *result = db_search(query, pool, folders, files,
+                                                      DATABASE_INDEX_TYPE_NAME, cancellable);
+
+            if (result) {
+                // Print matching folders
+                if (result->folders) {
+                    uint32_t num = darray_get_num_items(result->folders);
+                    for (uint32_t i = 0; i < num; i++) {
+                        FsearchDatabaseEntry *entry = darray_get_item(result->folders, i);
                         GString *p = db_entry_get_path_full(entry);
                         if (p) { printf("%s\n", p->str); g_string_free(p, TRUE); }
                     }
                 }
+
+                // Print matching files
+                if (result->files) {
+                    uint32_t num = darray_get_num_items(result->files);
+                    for (uint32_t i = 0; i < num; i++) {
+                        FsearchDatabaseEntry *entry = darray_get_item(result->files, i);
+                        GString *p = db_entry_get_path_full(entry);
+                        if (p) { printf("%s\n", p->str); g_string_free(p, TRUE); }
+                    }
+                }
+
+                // Clean up search result
+                g_clear_pointer(&result->folders, darray_unref);
+                g_clear_pointer(&result->files, darray_unref);
+                g_clear_pointer(&result, free);
             }
 
-            if (folders) {
-                uint32_t num = darray_get_num_items(folders);
-                for (uint32_t i = 0; i < num; i++) {
-                    FsearchDatabaseEntry *entry = darray_get_item(folders, i);
-                    const char *name = db_entry_get_name_raw(entry);
-                    if (name && (strlen(search_term) == 0 || strcasestr(name, search_term))) {
-                        GString *p = db_entry_get_path_full(entry);
-                        if (p) { printf("%s\n", p->str); g_string_free(p, TRUE); }
-                    }
-                }
-            }
+            // Clean up query and filter manager
+            fsearch_query_unref(query);
+            fsearch_filter_manager_free(filter_manager);
+
             db_unref(db);
             fflush(stdout);
-            _exit(0); 
+            _exit(0);
         }
         _exit(1);
     }
